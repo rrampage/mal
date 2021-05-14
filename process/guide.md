@@ -96,7 +96,7 @@ cd mal
 * Make a new directory for your implementation. For example, if your
 language is called "quux":
 ```
-mkdir quux
+mkdir impls/quux
 ```
 
 * Modify the top level Makefile to allow the tests to be run against
@@ -106,10 +106,10 @@ mkdir quux
 ```
 IMPLS = ... quux ...
 ...
-quux_STEP_TO_PROG = mylang/$($(1)).qx
+quux_STEP_TO_PROG = impls/quux/$($(1)).qx
 ```
 
-* Add a "run" script to you implementation directory that listens to
+* Add a "run" script to your implementation directory that listens to
   the "STEP" environment variable for the implementation step to run
   and defaults to "stepA_mal". Make sure the run script has the
   executable file permission set (or else the test runner might fail with a
@@ -219,7 +219,7 @@ the file extension for that language is "qx".
 
 This step is basically just creating a skeleton of your interpreter.
 
-* Create a `step0_repl.qx` file in `quux/`.
+* Create a `step0_repl.qx` file in `impls/quux/`.
 
 * Add the 4 trivial functions `READ`, `EVAL`, `PRINT`, and `rep`
   (read-eval-print). `READ`, `EVAL`, and `PRINT` are basically just
@@ -677,7 +677,7 @@ Now go to the top level, run the step 3 tests and fix the errors.
 make "test^quux^step3"
 ```
 
-You mal implementation is still basically just a numeric calculator
+Your mal implementation is still basically just a numeric calculator
 with save/restore capability. But you have set the foundation for step
 4 where it will begin to feel like a real programming language.
 
@@ -1123,9 +1123,10 @@ unquoted (normal evaluation). There are two special forms that only
 mean something within a quasiquoted list: `unquote` and
 `splice-unquote`. These are perhaps best explained with some examples:
 
-* `(def! lst (quote (2 3)))` -> `(2 3)`
-* `(quasiquote (1 (unquote lst)))` -> `(1 (2 3))`
-* `(quasiquote (1 (splice-unquote lst)))` -> `(1 2 3)`
+* `(def! lst (quote (b c)))` -> `(b c)`
+* `(quasiquote (a lst d))` -> `(a lst d)`
+* `(quasiquote (a (unquote lst) d))` -> `(a (b c) d)`
+* `(quasiquote (a (splice-unquote lst) d))` -> `(a b c d)`
 
 The `unquote` form turns evaluation back on for its argument and the
 result of evaluation is put in place into the quasiquoted list. The
@@ -1162,28 +1163,57 @@ Mal borrows most of its syntax and feature-set).
 * Add the `quote` special form. This form just returns its argument
   (the second list element of `ast`).
 
-* Add the `quasiquote` special form. First implement a helper function
-  `is_pair` that returns true if the parameter is a non-empty list.
-  Then define a `quasiquote` function. This is called from `EVAL` with
-  the first `ast` argument (second list element) and then `ast` is set
-  to the result and execution continues at the top of the loop (TCO).
+* Add the `quasiquote` function.
   The `quasiquote` function takes a parameter `ast` and has the
-  following conditional:
-  1. if `is_pair` of `ast` is false: return a new list containing:
-     a symbol named "quote" and `ast`.
-  2. else if the first element of `ast` is a symbol named "unquote":
-     return the second element of `ast`.
-  3. if `is_pair` of the first element of `ast` is true and the first
-     element of first element of `ast` (`ast[0][0]`) is a symbol named
-     "splice-unquote": return a new list containing: a symbol named
-     "concat", the second element of first element of `ast`
-     (`ast[0][1]`), and the result of calling `quasiquote` with the
-     second through last element of `ast`.
-  4. otherwise: return a new list containing: a symbol named "cons", the
-     result of calling `quasiquote` on first element of `ast`
-     (`ast[0]`), and the result of calling `quasiquote` with the second
-     through last element of `ast`.
+  following conditional.
+  - If `ast` is a list starting with the "unquote" symbol, return its
+    second element.
+  - If `ast` is a list failing previous test, the result will be a
+    list populated by the following process.
 
+    The result is initially an empty list.
+    Iterate over each element `elt` of `ast` in reverse order:
+    - If `elt` is a list starting with the "splice-unquote" symbol,
+      replace the current result with a list containing:
+      the "concat" symbol,
+      the second element of `elt`,
+      then the previous result.
+    - Else replace the current result with a list containing:
+      the "cons" symbol,
+      the result of calling `quasiquote` with `elt` as argument,
+      then the previous result.
+
+    This process can also be described recursively:
+    - If `ast` is empty return it unchanged. else let `elt` be its
+      first element.
+    - If `elt` is a list starting with the "splice-unquote" symbol,
+      return a list containing:
+      the "concat" symbol,
+      the second element of `elt`,
+      then the result of processing the rest of `ast`.
+    - Else return a list containing:
+      the "cons" symbol,
+      the result of calling `quasiquote` with `elt` as argument,
+      then the result of processing the rest of `ast`.
+  - If `ast` is a map or a symbol, return a list containing:
+    the "quote" symbol,
+    then `ast`.
+  - Else return `ast` unchanged.
+    Such forms are not affected by evaluation, so you may quote them
+    as in the previous case if implementation is easyer.
+
+* Optionally, add a the `quasiquoteexpand` special form.
+  This form calls the `quasiquote` function using the first `ast`
+  argument (second list element) and returns the result.
+  It has no other practical purpose than testing your implementation
+  of the `quasiquote` internal function.
+
+* Add the `quasiquote` special form.
+  This form does the same than `quasiquoteexpand`,
+  but evaluates the result in the current environment before returning it,
+  either by recursively calling `EVAL` with the result and `env`,
+  or by assigning `ast` with the result and continuing execution at
+  the top of the loop (TCO).
 
 Now go to the top level, run the step 7 tests:
 ```
@@ -1218,12 +1248,20 @@ macros.
     the symbol "splice-unquote" and the result of reading the next
     form (`read_form`).
 
-* Add support for quoting of vectors. The `is_pair` function should
-  return true if the argument is a non-empty list or vector. `cons`
+* Add support for quoting of vectors. `cons`
   should also accept a vector as the second argument. The return value
-  is a list regardless. `concat` should support concatenation of
-  lists, vectors, or a mix or both. The result is always a list.
+  is a list regardless.  `concat` should support concatenation of
+  lists, vectors, or a mix of both.  The result is always a list.
 
+  Implement a core function `vec` turning a list into a vector with
+  the same elements.  If provided a vector, `vec` should return it
+  unchanged.
+
+  In the `quasiquote` function, when `ast` is a vector,
+  return a list containing:
+  the "vec" symbol,
+  then the result of processing `ast` as if it were a list not
+  starting with `unquote`.
 
 <a name="step8"></a>
 
@@ -1348,10 +1386,10 @@ implementation. Let us continue!
 ```
 "(defmacro! cond (fn* (& xs) (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw \"odd number of forms to cond\")) (cons 'cond (rest (rest xs)))))))"
 ```
-    * Note that `cond` calls the `throw` function when `cond` is
-      called with an odd number of args. The `throw` function is
-      implemented in the next step, but it will still serve it's
-      purpose here by causing an undefined symbol error.
+  * Note that `cond` calls the `throw` function when `cond` is
+    called with an odd number of args. The `throw` function is
+    implemented in the next step, but it will still serve it's
+    purpose here by causing an undefined symbol error.
 
 
 <a name="step9"></a>
@@ -1607,11 +1645,11 @@ implementation.
   metadata attribute that refers to another mal value/type
   (nil by default). Add the following metadata related core functions
   (and remove any stub versions):
-  * `meta`: this takes a single mal function argument and returns the
-    value of the metadata attribute.
+  * `meta`: this takes a single mal function/list/vector/hash-map argument
+    and returns the value of the metadata attribute.
   * `with-meta`: this function takes two arguments. The first argument
-    is a mal function and the second argument is another mal
-    value/type to set as metadata. A copy of the mal function is
+    is a mal function/list/vector/hash-map and the second argument is
+    another mal value/type to set as metadata. A copy of the mal function is
     returned that has its `meta` attribute set to the second argument.
     Note that it is important that the environment and macro attribute
     of mal function are retained when it is copied.
@@ -1652,14 +1690,15 @@ implementation.
     strings.
 * For interop with the target language, add this core function:
   * `quux-eval`: takes a string, evaluates it in the target language,
-    and returns the result converted to the relevant Mal type. You
-    may also add other interop functions as you see fit; Clojure, for
+    and returns the result converted to the relevant Mal type. You may
+    also add other interop functions as you see fit; Clojure, for
     example, has a function called `.` which allows calling Java
     methods. If the target language is a static language, consider
     using FFI or some language-specific reflection mechanism, if
     available. The tests for `quux-eval` and any other interop
-    function should be added in `quux/tests/stepA_mal.mal` (see the
-    [tests for `lua-eval`](../lua/tests/stepA_mal.mal) as an example).
+    function should be added in `impls/quux/tests/stepA_mal.mal` (see
+    the [tests for `lua-eval`](../impls/lua/tests/stepA_mal.mal) as an
+    example).
 
 ### Next Steps
 
